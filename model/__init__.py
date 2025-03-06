@@ -1,9 +1,14 @@
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 from chromadb import Documents, EmbeddingFunction, Embeddings, PersistentClient
 from langchain_huggingface import HuggingFaceEmbeddings
-from llama_index.core import SimpleDirectoryReader, StorageContext, VectorStoreIndex
+from llama_index.core import (
+    Document,
+    SimpleDirectoryReader,
+    StorageContext,
+    VectorStoreIndex,
+)
 from llama_index.embeddings.langchain import LangchainEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -41,8 +46,11 @@ class EmbeddingFunctionPrompt(EmbeddingFunction):
         ]
 
 
-def create_rag_pipeline(model_name: str) -> Tuple[Dict[str, str], int]:
-    base_path = Path() / "UPLOADS" / model_name
+def create_rag_pipeline(
+    model_name: str,
+    scraped_data: List[Dict[str, Any]],
+) -> Tuple[Dict[str, str], int]:
+    base_path = Path.cwd() / "uploads" / model_name
     rag_path = base_path / "rag"
     db_path = base_path / "chroma.sqlite3"
 
@@ -51,14 +59,11 @@ def create_rag_pipeline(model_name: str) -> Tuple[Dict[str, str], int]:
             "message": "RAG pipeline already created",
             "embeddings_db_path": db_path.as_posix(),
         }, 200
-    elif not rag_path.exists():
-        return {"error": "No files uploaded"}, 400
+    elif not rag_path.exists() and not scraped_data:
+        return {"error": "No files uploaded or data scraped"}, 400
 
-    documents = SimpleDirectoryReader(
-        rag_path,
-        recursive=True,
-        exclude_hidden=True,
-    ).load_data(show_progress=True)
+    # Add scraped data to documents
+
     db = PersistentClient(base_path.as_posix())
     collection = db.create_collection(
         "embeddings_db",
@@ -66,12 +71,21 @@ def create_rag_pipeline(model_name: str) -> Tuple[Dict[str, str], int]:
     )
     vector_store = ChromaVectorStore(chroma_collection=collection)
     storage_context = StorageContext.from_defaults(vector_store=vector_store)
-    VectorStoreIndex.from_documents(
-        documents,
-        storage_context,
-        embed_model=adapter_embed_prompt,
-        show_progress=True,
-    )
+    if any(rag_path.iterdir()):
+        documents = SimpleDirectoryReader(
+            rag_path,
+            recursive=True,
+            exclude_hidden=True,
+            errors="ignore",
+        ).load_data(show_progress=True)
+        VectorStoreIndex.from_documents(
+            documents,
+            storage_context,
+            embed_model=adapter_embed_prompt,
+            show_progress=True,
+        )
+        for data in scraped_data:
+            documents.append(Document(**data))
 
     return {
         "message": "RAG pipeline created and embeddings saved",
@@ -80,7 +94,7 @@ def create_rag_pipeline(model_name: str) -> Tuple[Dict[str, str], int]:
 
 
 def query_rag_pipeline(model_name: str, query: str) -> Tuple[Dict[str, Any], int]:
-    base_path = Path() / "UPLOADS" / model_name
+    base_path = Path.cwd() / "uploads" / model_name
     db_path = base_path / "chroma.sqlite3"
 
     if not db_path.exists():
