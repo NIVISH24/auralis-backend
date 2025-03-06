@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
@@ -87,10 +87,9 @@ def scrape_urls(urls: List[str]) -> List[Dict[str, str]]:
 @app.post("/upload")
 async def upload_files(
     model_name: str = Form(...),
-    topic: Optional[str] = Form(None),
-    urls: Optional[List[str]] = Form(None),
-    rag_files: Optional[List[UploadFile]] = File(None),
-    text_inputs: Optional[List[str]] = Form(None),
+    topic: str | None = Form(None),
+    urls: List[str] | None = Form(None),
+    rag_files: List[UploadFile] | None = File(None),
 ) -> Response:
     """
     Handles file uploads for RAG and fine-tuning, and topic-based scraping.
@@ -128,12 +127,7 @@ async def upload_files(
     if urls:
         scraped_data.extend(scrape_urls(urls))
 
-    if text_inputs:
-        for text in text_inputs:
-            scraped_data.append({"content": text})
-
     create_rag_pipeline(model_name, scraped_data)
-    __import__("json").dump(scraped_data, open("scraped_data.json", "w"), indent=4)
 
     return JSONResponse(
         content={
@@ -175,5 +169,4 @@ async def rag_algorithm(request: RAGRequest) -> Response:
     except FileNotFoundError as e:
         return JSONResponse(content={"error": str(e)}, status_code=404)
     except Exception as e:
-        print(e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
