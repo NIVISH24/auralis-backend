@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import os
-from asyncio import Future, get_running_loop
-from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Optional
 
+from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 from fastapi import (
-    BackgroundTasks,
     FastAPI,
     File,
     Form,
@@ -17,18 +17,9 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from scrapy.crawler import CrawlerRunner
-from scrapy.utils.log import configure_logging
-from scrapy.utils.project import get_project_settings
-from twisted.internet.asyncioreactor import install
-from twisted.internet.defer import Deferred
+from requests import get
 
 from model import create_rag_pipeline, query_rag_pipeline
-from webscraper.spiders.scraper import WebSpider
-
-install()
-
-configure_logging()
 
 app = FastAPI()
 app.add_middleware(
@@ -38,28 +29,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-runner = CrawlerRunner(get_project_settings())
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+}
 
 UPLOADS_FOLDER = "uploads"
 RAG_UPLOADS_FOLDER = "rag"
-
-
-def deferred_to_future(d: Deferred) -> Future:
-    loop = get_running_loop()
-    future = loop.create_future()
-
-    def callback(result):
-        if not future.cancelled():
-            future.set_result(result)
-        return result
-
-    def errback(failure):
-        if not future.cancelled():
-            future.set_exception(failure.value)
-        return failure
-
-    d.addCallbacks(callback, errback)
-    return future
 
 
 class RAGRequest(BaseModel):
@@ -78,9 +54,38 @@ def search_duckduckgo(topic: str, max_results: int = 5) -> List[str]:
     return [result["href"] for result in search_results if "href" in result]
 
 
+def scrape_url(url: str) -> Dict[str, str]:
+    """
+    Scrapes a single URL using requests and BeautifulSoup4.
+    Returns a dict with URL, title, and content.
+    """
+    try:
+        with get(url, headers=headers) as response:
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            title = soup.title.get_text(strip=True) if soup.title else ""
+            paragraphs = soup.find_all("p")
+            content = " ".join(p.get_text(strip=True) for p in paragraphs)
+            return {"url": url, "title": title, "content": content}
+    except Exception as e:
+        print(f"Error scraping {url}: {e}")
+        return {"url": url, "title": None, "content": None, "error": str(e)}
+
+
+def scrape_urls(urls: List[str]) -> List[Dict[str, str]]:
+    """
+    Scrapes multiple URLs and returns a list of dictionaries.
+    """
+    results: List[Dict[str, str]] = []
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results.extend(executor.map(scrape_url, urls))
+
+    return results
+
+
 @app.post("/upload")
 async def upload_files(
-    background_tasks: BackgroundTasks,
     model_name: str = Form(...),
     topic: Optional[str] = Form(None),
     urls: Optional[List[str]] = Form(None),
@@ -121,13 +126,14 @@ async def upload_files(
             )
 
     if urls:
-        await deferred_to_future(runner.crawl(WebSpider, urls=urls, name=model_name))
+        scraped_data.extend(scrape_urls(urls))
 
     if text_inputs:
         for text in text_inputs:
             scraped_data.append({"content": text})
 
     create_rag_pipeline(model_name, scraped_data)
+    __import__("json").dump(scraped_data, open("scraped_data.json", "w"), indent=4)
 
     return JSONResponse(
         content={
@@ -169,4 +175,5 @@ async def rag_algorithm(request: RAGRequest) -> Response:
     except FileNotFoundError as e:
         return JSONResponse(content={"error": str(e)}, status_code=404)
     except Exception as e:
+        print(e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
