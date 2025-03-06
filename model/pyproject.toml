@@ -1,0 +1,16 @@
+[project]
+name = "model"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "chromadb>=0.6.3",
+    "langchain>=0.3.20",
+    "langchain-community>=0.3.19",
+    "langchain-huggingface>=0.1.2",
+    "llama-index>=0.12.22",
+    "llama-index-embeddings-langchain>=0.3.0",
+    "llama-index-llms-ollama>=0.5.3",
+    "llama-index-vector-stores-chroma>=0.4.1",
+]
