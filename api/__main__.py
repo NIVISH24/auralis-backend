@@ -6,8 +6,8 @@ if __name__ == "__main__":
     run(
         "api:app",
         host="0.0.0.0",
-        port=8000,
+        port=7000,
         log_level=INFO,
-        reload=True,
+        reload=False,
         reload_excludes=["uploads", "__pycache__"],
     )
