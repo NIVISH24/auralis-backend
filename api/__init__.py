@@ -7,6 +7,7 @@ from typing import Dict, List
 from bs4 import BeautifulSoup
 from duckduckgo_search import DDGS
 from fastapi import (
+    BackgroundTasks,
     FastAPI,
     File,
     Form,
@@ -24,7 +25,7 @@ from model import create_rag_pipeline, query_rag_pipeline
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,6 +87,7 @@ def scrape_urls(urls: List[str]) -> List[Dict[str, str]]:
 
 @app.post("/upload")
 async def upload_files(
+    background_tasks: BackgroundTasks,
     model_name: str = Form(...),
     topic: str | None = Form(None),
     urls: List[str] | None = Form(None),
@@ -97,6 +99,7 @@ async def upload_files(
     if not model_name:
         raise HTTPException(status_code=400, detail="Model name is required")
 
+    print(f"{model_name=}, {topic=}, {urls=}, {rag_files=}")
     model_folder = os.path.join(UPLOADS_FOLDER, model_name)
     rag_folder = os.path.join(model_folder, RAG_UPLOADS_FOLDER)
 
@@ -117,7 +120,7 @@ async def upload_files(
 
     scraped_data = []
 
-    if topic and not urls:
+    if topic:
         urls = search_duckduckgo(topic, max_results=20)
         if not urls:
             return JSONResponse(
@@ -127,7 +130,7 @@ async def upload_files(
     if urls:
         scraped_data.extend(scrape_urls(urls))
 
-    create_rag_pipeline(model_name, scraped_data)
+    background_tasks.add_task(create_rag_pipeline, model_name, scraped_data)
 
     return JSONResponse(
         content={
@@ -164,7 +167,7 @@ async def rag_algorithm(request: RAGRequest) -> Response:
     query = request.query
 
     try:
-        result, status_code = query_rag_pipeline(model_name, query)
+        result, status_code = await query_rag_pipeline(model_name, query)
         return JSONResponse(content={"results": result}, status_code=status_code)
     except FileNotFoundError as e:
         return JSONResponse(content={"error": str(e)}, status_code=404)

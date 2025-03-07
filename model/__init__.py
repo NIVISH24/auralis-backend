@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Union
+from json import loads
 
 from chromadb import Documents, EmbeddingFunction, Embeddings, PersistentClient
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -9,6 +10,7 @@ from llama_index.core import (
     StorageContext,
     VectorStoreIndex,
 )
+from ollama import AsyncClient
 from llama_index.embeddings.langchain import LangchainEmbedding
 from llama_index.llms.ollama import Ollama
 from llama_index.vector_stores.chroma import ChromaVectorStore
@@ -128,7 +130,21 @@ def create_rag_pipeline(
     }, 200
 
 
-def query_rag_pipeline(model_name: str, query: str) -> Tuple[Dict[str, Any], int]:
+async def stream_chat(message: str) -> str:
+    total_parts = ""
+
+    async for part in await AsyncClient().chat(
+        model="llama3.2",
+        stream=True,
+        format="json",
+        messages=[{"role": "user", "content": message}],
+    ):
+        total_parts += part["message"]["content"]
+
+    return total_parts
+
+
+async def query_rag_pipeline(model_name: str, query: str) -> Tuple[Dict[str, Any], int]:
     """
     Queries the RAG pipeline for the specified model and query string.
 
@@ -142,19 +158,36 @@ def query_rag_pipeline(model_name: str, query: str) -> Tuple[Dict[str, Any], int
 
     db = PersistentClient(base_path.as_posix())
     collection = db.get_collection("embeddings_db")
-    print(f"{collection = }")
     vector_store = ChromaVectorStore(chroma_collection=collection)
     index = VectorStoreIndex.from_vector_store(
         vector_store,
         embed_model=adapter_embed_prompt,
     )
     query_engine = index.as_query_engine(llm=ollama)
-    print(f"{query_engine = }")
     response = query_engine.query(query)
-    print(f"{response = }")
 
     if response:
+        response = await stream_chat(splitter_prompt(response.response))
         # Return the result; adjust this dependingdd on your LLM response format.
-        return response.response, 200  # type: ignore
+        return loads(response), 200  # type: ignore
 
     return {"error": "No response found"}, 404
+
+
+def splitter_prompt(text: str) -> List[str]:
+    """
+    Splits the input text into multiple prompts.
+    """
+    format = {
+        "splitted_text": {
+            "topic1": "information on topic1 as markdown",
+            "topic2": "information on topic2 as markdown",
+            "topic3": "information on topic3 as markdown",
+        },
+    }
+    return (
+        f"This is the response: {text}\n\n Split it to break the parts of the response wherever"
+        "you think is a different topic that can be explored/expanded even more. If it can't be split, give just one element in the list. Give it in json format like in"
+        "the example below.:"
+        f"{format}"
+    )
